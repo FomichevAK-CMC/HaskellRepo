@@ -2,7 +2,6 @@
 # You should not edit this file by hand.
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/topics/lock_files
-
 packages: []
 snapshots:
 - completed:
