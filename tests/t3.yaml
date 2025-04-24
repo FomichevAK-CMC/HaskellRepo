@@ -1,0 +1,15 @@
+# TEST 3
+# EXPECTED RESULT: SUCCESS
+# This is a simple test to check type conversion and correct handling
+# of escape symbols and different quote styles
+
+hello:
+    apple: 1           # should remain without quotes
+    cucumber: -2.4E+12 # should remain without quotes
+    orange: No         # should convert to false
+world:
+  - - "high\n"     # should remain: "high\n"
+    - 'midd''le'   # should escape ' symbol and become: "midd'le"
+    - low\n        # should escape \n and become: "low\\n"
+  - ~   # should convert to: null
+

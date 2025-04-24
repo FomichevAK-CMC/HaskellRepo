@@ -1,151 +1,241 @@
 {-# LANGUAGE LambdaCase #-}
-module MyParser (yamlToJson) where
+module MyParser  where
 import YAMLLexer
 
+-- main yaml types (not all are supported yet)
 data YamlValue
-    = YamlScalar String ScalarStyle --(Maybe String) (Maybe String) -- Value, Style, Maybe Anchor, Maybe Tag
-    | YamlMap [(YamlValue, YamlValue)] --(Maybe String) (Maybe String) -- Ass K-V pairs, Maybe Anchor, Maybe Tag
-    | YamlSeq [YamlValue] --(Maybe String) (Maybe String)             -- List of values, Maybe Anchor, Maybe Tag
+    = YamlScalar String ScalarStyle
+    | YamlMap [(YamlValue, YamlValue)]
+    | YamlSeq [YamlValue]
+    | YamlPlain String
+    | YamlStr String
     | YamlAlias String -- Alias Name (Anchor ref)
+    | YamlEmpty
     deriving (Show, Eq)
 
+-- preprocessed yaml token types
 data PreprocYamlToken
     = PreYamlKV YamlToken YamlToken
     | PreYamlK YamlToken -- key without specified value
     | PreYamlSeqItem YamlToken
+    | PreYamlSeq 
     | PreYamlDocStart
     | PreYamlDocEnd
     | PreYamlScalar YamlToken
-    | PreYamlIndent Int
-    | PreYamlDedent
     | PreYamlEof
     deriving (Show, Eq)
 
-data YamlDocument = YamlDoc [YamlValue] deriving (Show, Eq)
-{-
-processPreYamlTokens :: [PreprocYamlToken] -> [YamlDocument]
-processPreYamlTokens [] = error "ERROR (processPreYamlTokens): empty or no-eof token list passed!"
-processPreYamlTokens (PreYamlEof:_) = []
-processPreYamlTokens tokens =
-    let (doc, rest) =
-            case tokens of
-                (PreYamlDocStart:rest) -> _processPreYamlTokens_doc rest []
-                otherwise -> _processPreYamlTokens_doc tokens []
-    in (doc:preprocYamlTokens rest)
-_processPreYamlTokens_doc :: [PreprocYamlToken] -> [YamlValue] -> (YamlDocument, [PreprocYamlToken])
-_processPreYamlTokens_doc tokens doc =
-    case tokens of
-        (PreYamlEof:rest)      -> (doc, rest)
-        (PreYamlDocEnd:rest)   -> (doc, rest)
-        (PreYamlDocStart:rest) -> (doc, rest)
-        _other -> _processPreYamlTokens_val tokens
-
-_processPreYamlTokens_val :: [PreprocYamlToken] -> (YamlValue, [PreprocYamlToken])
-_processPreYamlTokens_val tokens doc =
-    case tokens of
-        ()
--}
-
--- groups lexer tokens into more colpex structures like key-value pairs, sequence elements etc.
-preprocYamlTokens :: [YamlToken] -> [PreprocYamlToken]
+-- preprocesses lexer tokens assigning them basic semantic roles
+preprocYamlTokens :: [(Int, YamlToken)] -> [(Int, PreprocYamlToken)]
 preprocYamlTokens tokens = _preprocYamlTokens $ stripRedundant tokens
+_preprocYamlTokens :: [(Int, YamlToken)] -> [(Int, PreprocYamlToken)]
 _preprocYamlTokens [] = []
 _preprocYamlTokens tokens =
-    let (t, rest) =
+    let (t, rest2) =
             case tokens of
-                (key@(SCALAR _ _):COLON:val@(SCALAR _ _):rest) -> (PreYamlKV key val, rest)
-                (key@(SCALAR _ _):COLON:rest) -> (PreYamlK key, rest)
-                (sc@(SCALAR _ _):rest)        -> (PreYamlScalar sc, rest)
-                (DASH:sc@(SCALAR _ _):rest)   -> (PreYamlSeqItem sc, rest)
-                (DOC_START:rest) -> (PreYamlDocStart, rest)
-                (DOC_END:rest)   -> (PreYamlDocEnd, rest)
-                (INDENT i:rest)  -> (PreYamlIndent i, rest)
-                (DEDENT:rest)    -> (PreYamlDedent, rest)
-                (EOF:rest)       -> (PreYamlEof, rest)
-                _other -> error $ "preprocYamlTokens: Unsupported token <" ++ (show _other) ++ ">!"
-    in (t:_preprocYamlTokens rest)
-
-data YamlStructure = YamlAtom PreprocYamlToken | YamlStruct [YamlStructure] deriving (Show, Eq)
-
--- arranges series of yaml tokens into a structure based in indentation
-extractStructure :: [PreprocYamlToken] -> YamlStructure -- Add document support
-extractStructure tokens = fst $ _extractStructure tokens
-_extractStructure :: [PreprocYamlToken] -> (YamlStructure, [PreprocYamlToken])
-_extractStructure tokens =
-    case tokens of
-        (PreYamlIndent _:rest) -> let (s, rest2) = _extractStructure rest in let (YamlStruct ss, rest3) = _extractStructure rest2 in (YamlStruct (s:ss), rest3)
-        (PreYamlDedent:rest) -> (YamlStruct [], rest)
-        (PreYamlEof:rest) -> (YamlStruct [], (PreYamlEof:rest))
-        (_other:rest)     -> let (YamlStruct st, rest2) = _extractStructure rest in (YamlStruct (YamlAtom _other:st), rest2)
-
--- infers type of yaml structure
-inferYamlStructureType :: YamlStructure -> YamlValue
-inferYamlStructureType struct = 
-    case struct of
-        YamlStruct (YamlAtom (PreYamlKV (SCALAR str1 style1) (SCALAR str2 style2)):rest)
-            -> YamlMap $ _inferYamlStructureType_map rest [(YamlScalar str1 style1, YamlScalar str2 style2)]
-        YamlStruct (YamlAtom (PreYamlK (SCALAR str style)):st@(YamlStruct _):rest)
-            -> YamlMap $ _inferYamlStructureType_map rest [(YamlScalar str style, inferYamlStructureType st)]
-        
-        YamlStruct (YamlAtom (PreYamlSeqItem (SCALAR str style)):rest)
-            -> YamlSeq $ _inferYamlStructureType_seq rest [YamlScalar str style]
-        _other -> error $ "ERROR (inferStructureType): inconsistent structure type! Token: " ++ (show _other)
-        
-_inferYamlStructureType_map :: [YamlStructure] -> [(YamlValue, YamlValue)] -> [(YamlValue, YamlValue)]
-_inferYamlStructureType_map [] vs = vs
-_inferYamlStructureType_map ((YamlAtom (PreYamlKV (SCALAR str1 style1) (SCALAR str2 style2))):rest) vs
-    = _inferYamlStructureType_map rest vs++[(YamlScalar str1 style1, YamlScalar str2 style2)]
-_inferYamlStructureType_map (YamlAtom (PreYamlK (SCALAR str style)):st@(YamlStruct _):rest) vs
-    = _inferYamlStructureType_map rest vs++[(YamlScalar str style, inferYamlStructureType st)]
-_inferYamlStructureType_map _other vs
-    = error $ "ERROR (_inferStructureType_map): inconsistent structure type! Token: " ++ (show _other)
-
-_inferYamlStructureType_seq ::  [YamlStructure] -> [YamlValue] -> [YamlValue]
-_inferYamlStructureType_seq [] vs = vs
-_inferYamlStructureType_seq (struct:rest) vs =
-    case struct of
-        YamlAtom (PreYamlSeqItem (SCALAR str style))
-            -> _inferYamlStructureType_seq rest vs++[YamlScalar str style]
-        _other -> error $ "ERROR (_inferStructureType_seq): inconsistent structure type! Token: " ++ (show _other)
+                ((i, key@(SCALAR _ _)):(_, COLON):rest) -> ((i, PreYamlK key), rest)
+                ((i, sc@(SCALAR _ _)):rest) -> ((i, PreYamlScalar sc), rest)
+                ((i, DASH):rest) -> ((i, PreYamlSeq), rest)
+                ((_, DOC_START):rest) -> ((0, PreYamlDocStart), rest)
+                ((_, DOC_END):rest)   -> ((0, PreYamlDocEnd), rest)
+                ((_, EOF):rest)       -> ((0, PreYamlEof), rest)
+                ((_,other):_) -> error $ "ERROR (_preprocYamlTokens): unsupported token <"
+                                  ++ (show other) ++ ">!\n"
+    in (t:_preprocYamlTokens rest2)
 
 
+data YamlDocument = YamlDoc YamlValue deriving (Show, Eq)
+
+-- arranges a series of preprocessed yaml tokens into a structure based on indentation
+extractStructure :: [(Int, PreprocYamlToken)] -> [YamlDocument] -- TODO: Add document support
+extractStructure [] = error $ "ERROR (extractStruncture): incomplete structure!"
+extractStructure tokens@((_, PreYamlDocStart):rest) = _extractStructure tokens
+extractStructure tokens = _extractStructure ((0, PreYamlDocStart):tokens)
+
+_extractStructure :: [(Int, PreprocYamlToken)] -> [YamlDocument]
+_extractStructure [] = error $ "ERROR (extractStruncture): incomplete structure!"
+_extractStructure ((i, PreYamlDocStart):rest) = let (val, rest2) = _extractStructure_1 rest i in
+                                                    (YamlDoc val):(_extractStructure rest2)
+_extractStructure ((_, PreYamlDocEnd):(_, PreYamlEof):rest) = []
+_extractStructure ((_, PreYamlDocEnd):rest) = (YamlDoc YamlEmpty):(_extractStructure rest)
+_extractStructure ((_, PreYamlEof):_) = []
+_extractStructure tokens@((i, _):_) = error $ "ERROR (_extractStructure): inconsistent yaml structure!" 
+
+
+_extractStructure_1 :: [(Int, PreprocYamlToken)] -> Int -> (YamlValue, [(Int, PreprocYamlToken)])
+_extractStructure_1 [] _ = error $ "ERROR (_extractStruncture_1): incomplete structure!"
+_extractStructure_1 tokens@((i, token):rest) ind
+    | i < ind = error $ "ERROR (_extractStructure_seq): inconsistent indentation for token "
+                        ++ (show token)++ "! Got " ++ (show i) ++ ", expected " ++ (show ind) ++ "."
+    | otherwise =
+        case token of
+            (PreYamlScalar (SCALAR str style)) -> _extractStructure_str tokens i
+            PreYamlK _      -> _extractStructure_map tokens i
+            PreYamlSeq      -> _extractStructure_seq tokens i
+            PreYamlDocEnd   -> (YamlEmpty, rest)
+            PreYamlDocStart -> (YamlEmpty, tokens)
+            PreYamlEof      -> (YamlEmpty, tokens)
+            _other -> error $ "ERROR (_extractStructure_1): unsupported token <"
+                              ++ (show token) ++ ">!\n"
+_extractStructure_str :: [(Int, PreprocYamlToken)] -> Int -> (YamlValue, [(Int, PreprocYamlToken)])
+_extractStructure_str tokens@((i, (PreYamlScalar (SCALAR str style))):next:rest) ind =
+    case next of
+        (_, PreYamlDocEnd) -> ((YamlScalar str style), rest)
+        _                  -> ((YamlScalar str style), next:rest)
+
+_extractStructure_seq :: [(Int, PreprocYamlToken)] -> Int -> (YamlValue, [(Int, PreprocYamlToken)])
+_extractStructure_seq [] _ = error $ "ERROR (_extractStruncture_seq): incomplete structure!"
+_extractStructure_seq tokens@((i, token):rest) ind
+    | i > ind = error $ "ERROR (_extractStructure_seq): inconsistent indentation for token "
+                        ++ (show token)++ "! Got " ++ (show i) ++ ", expected " ++ (show ind) ++ "."
+    | i < ind = ((YamlSeq []), tokens)
+    | otherwise =
+        case token of
+            PreYamlSeq ->
+                let (s, rest2) = _extractStructure_1 rest i in
+                    let (YamlSeq ss, rest3) = _extractStructure_seq rest2 ind in -- ignore wanring
+                        (YamlSeq (s:ss), rest3)
+            PreYamlK _      -> ((YamlSeq []), tokens)
+            PreYamlEof      -> ((YamlSeq []), tokens)
+            PreYamlDocEnd   -> ((YamlSeq []), rest)
+            PreYamlDocStart -> ((YamlSeq []), tokens)
+            _ -> error $ "ERROR (_extractStructure_seq): inconsistent sequence structure (got "
+                         ++ (show token) ++ " token with <" ++ (show i) ++ "> indent)!\n"
+
+_extractStructure_map :: [(Int, PreprocYamlToken)] ->  Int -> (YamlValue, [(Int, PreprocYamlToken)])
+_extractStructure_map [] _ = error $ "ERROR (_extractStruncture_map): incomplete structure!"
+_extractStructure_map tokens@((i, token):rest) ind
+    | i > ind = error $ "ERROR (_extractStructure_map): inconsistent indentation for token "
+                        ++ (show token)++ "! Got " ++ (show i) ++ ", expected " ++ (show ind) ++ "."
+    | i < ind = ((YamlMap []), tokens)
+    | otherwise =
+        case token of
+            (PreYamlK (SCALAR str style)) ->
+                let (s, rest2) = _extractStructure_1 rest i in
+                    let (YamlMap ss, rest3) = _extractStructure_map rest2 ind in -- ignore warning
+                        (YamlMap ((YamlScalar str style, s):ss), rest3)
+            PreYamlEof      -> ((YamlMap []), tokens)
+            PreYamlDocEnd   -> ((YamlMap []), rest)
+            PreYamlDocStart -> ((YamlMap []), tokens)
+            _ -> error $ "ERROR (_extractStructure_map): inconsistent mapping structure (got "
+                          ++ (show token) ++ " token with <" ++ (show i) ++ "> indent)!\n"
+
+digits :: String
+digits = "0123456789"
+digitsnz :: String
+digitsnz = "123456789"
+
+-- recursive descend to check if a string is a valid json number
+isJsonNumber :: String -> Bool
+isJsonNumber "" = False
+isJsonNumber (s:xs) | (s == '-') = _isJsonNumber_int_1 xs
+                    | otherwise = _isJsonNumber_int_1 (s:xs)
+_isJsonNumber_int_1 :: String -> Bool
+_isJsonNumber_int_1 "" = False
+_isJsonNumber_int_1 (s:xs) | (elem s digitsnz) = _isJsonNumber_int_2 xs
+                           | (s == '0') = _isJsonNumber_frc_1 xs
+                           | otherwise = False
+_isJsonNumber_int_2 :: String -> Bool
+_isJsonNumber_int_2 "" = True
+_isJsonNumber_int_2 (s:xs) | (elem s digits) = _isJsonNumber_int_2 xs
+                           | otherwise = _isJsonNumber_frc_1 (s:xs)
+_isJsonNumber_frc_1 :: String -> Bool
+_isJsonNumber_frc_1 "" = True
+_isJsonNumber_frc_1 (s:xs) | (s == '.') = _isJsonNumber_frc_2 xs
+                           | otherwise = _isJsonNumber_exp_1 (s:xs)
+_isJsonNumber_frc_2 :: String -> Bool
+_isJsonNumber_frc_2 "" = False
+_isJsonNumber_frc_2 (s:xs) | (elem s digits) = _isJsonNumber_frc_3 xs
+                           | otherwise = False
+_isJsonNumber_frc_3 :: String -> Bool
+_isJsonNumber_frc_3 "" = True
+_isJsonNumber_frc_3 (s:xs) | (elem s digits) = _isJsonNumber_frc_3 xs
+                           | otherwise = _isJsonNumber_exp_1 (s:xs)
+_isJsonNumber_exp_1 :: String -> Bool
+_isJsonNumber_exp_1 "" = True
+_isJsonNumber_exp_1 (s:xs) | (elem s "eE") = _isJsonNumber_exp_2 xs
+                           | otherwise = False
+_isJsonNumber_exp_2 :: String -> Bool
+_isJsonNumber_exp_2 "" = False
+_isJsonNumber_exp_2 (s:xs) | (elem s "-+") = _isJsonNumber_exp_3 xs
+                           | otherwise = _isJsonNumber_exp_3 (s:xs)
+_isJsonNumber_exp_3 :: String -> Bool
+_isJsonNumber_exp_3 "" = False
+_isJsonNumber_exp_3 (s:xs) | (elem s digits) = _isJsonNumber_exp_4 xs
+                           | otherwise = False
+_isJsonNumber_exp_4 :: String -> Bool
+_isJsonNumber_exp_4 "" = True
+_isJsonNumber_exp_4 (s:xs) | (elem s digits) = _isJsonNumber_exp_4 xs
+                           | otherwise = False
+
+isYamlTrue :: String -> Bool
+isYamlTrue str = elem str ["y", "Y", "yes", "Yes", "YES", "true", "True", "TRUE", "on", "On", "ON"]
+isYamlFalse :: String -> Bool
+isYamlFalse str = elem str ["n","N","no", "No","NO", "false", "False", "FALSE", "off", "Off", "OFF"]
+isYamlNull :: String -> Bool
+isYamlNull str = elem str ["", "~", "null", "Null", "NULL"]
+
+-- iterates over structure and assigns proper types to scalars
+inferScalarTypes :: YamlValue -> YamlValue
+inferScalarTypes YamlEmpty = YamlEmpty
+inferScalarTypes (YamlScalar str PlainStyle)
+    | isYamlTrue str = YamlPlain "true"
+    | isYamlFalse str = YamlPlain "false"
+    | isYamlNull str = YamlPlain "null"
+    | isJsonNumber str = YamlPlain str
+    | otherwise = YamlStr str
+inferScalarTypes (YamlScalar str _) = YamlStr str
+inferScalarTypes (YamlSeq items) = YamlSeq (map inferScalarTypes items)
+inferScalarTypes (YamlMap kvs) =
+    YamlMap (map (\(a, b) -> (inferScalarTypes a, inferScalarTypes b)) kvs)
+inferScalarTypes t = error $ "ERROR (inferScalarTypes): improper structure that contains: "
+                             ++ (show t) ++ "!\n"
+
+-- main function that converts yaml string into json string
 yamlToJson :: String -> String
-yamlToJson yamlstr = _yamlToJson (inferYamlStructureType $ extractStructure $ preprocYamlTokens $ lexer yamlstr) 0 0
+yamlToJson yamlstr = _yamlToJson_docs (extractStructure $ preprocYamlTokens $ lexer yamlstr)
+
+_yamlToJson_docs :: [YamlDocument] -> String
+_yamlToJson_docs docs = _yamlToJson (YamlSeq (map (\(YamlDoc v) -> inferScalarTypes v) docs)) 0 0
 _yamlToJson :: YamlValue -> Int -> Int -> String
-_yamlToJson (YamlMap kvs) ind_start ind_val = (indentStr ind_start "{\n") ++ (_yamlToJson_map kvs ind_val (ind_val + 2)) ++ "\n" ++ (indentStr ind_val "}")
-_yamlToJson (YamlSeq items) ind_start ind_val = (indentStr ind_start "[\n") ++ (_yamlToJson_seq items ind_val (ind_val + 2)) ++ "\n" ++ (indentStr ind_val "]")
-_yamlToJson (YamlScalar str style) ind_start ind_val = (indentStr ind_start "\"" ++ str ++ "\"")
+_yamlToJson YamlEmpty _ ind_val = (indentStr ind_val "null")
+_yamlToJson (YamlMap []) _ _ = "{}"
+_yamlToJson (YamlMap kvs) ind_start ind_val = (indentStr ind_start "{\n")
+                                              ++ (_yamlToJson_map kvs (ind_val + 2))
+                                              ++ "\n" ++ (indentStr ind_val "}")
+_yamlToJson (YamlSeq []) _ _ = "[]"
+_yamlToJson (YamlSeq items) ind_start ind_val = (indentStr ind_start "[\n")
+                                                ++ (_yamlToJson_seq items (ind_val + 2))
+                                                ++ "\n" ++ (indentStr ind_val "]")
+_yamlToJson (YamlPlain str) ind_start _ = (indentStr ind_start str)
+_yamlToJson (YamlStr str) ind_start _ = (indentStr ind_start (show str))
+_yamlToJson t _ _ = error $ "ERROR (_yamlToJson): unsupported token " ++ (show t) ++ "!\n"
 
-_yamlToJson_map :: [(YamlValue, YamlValue)] -> Int -> Int -> String
-_yamlToJson_map ((key, val):[]) ind_start ind_val = (_yamlToJson key ind_val (ind_val + 2)) ++ ": " ++ (_yamlToJson val 0 ind_val)
-_yamlToJson_map ((key, val):rest) ind_start ind_val = (_yamlToJson key ind_val (ind_val + 2)) ++ ": " ++ (_yamlToJson val 0 ind_val) ++ ",\n" ++ (_yamlToJson_map rest ind_start ind_val)
+_yamlToJson_map :: [(YamlValue, YamlValue)] -> Int -> String
+_yamlToJson_map [] _ = error $ "ERROR (_yamlToJson_map): empty structure passed!"
+_yamlToJson_map ((key, val):[]) ind = (_yamlToJson key ind ind)
+                                      ++ ": " ++ (_yamlToJson val 0 ind)
+_yamlToJson_map ((key, val):rest) ind = (_yamlToJson key ind ind)
+                                        ++ ": " ++ (_yamlToJson val 0 ind)
+                                        ++ ",\n" ++ (_yamlToJson_map rest ind)
 
-_yamlToJson_seq :: [YamlValue] -> Int -> Int -> String
-_yamlToJson_seq (item:[]) ind_start ind_val = (_yamlToJson item ind_val (ind_val + 2))
-_yamlToJson_seq (item:rest) ind_start ind_val = (_yamlToJson item ind_val (ind_val + 2)) ++ ",\n" ++ (_yamlToJson_seq rest ind_start ind_val)
+_yamlToJson_seq :: [YamlValue] -> Int -> String
+_yamlToJson_seq [] _ = error $ "ERROR (_yamlToJson_seq): empty structure passed!"
+_yamlToJson_seq (item:[]) ind = (_yamlToJson item ind ind)
+_yamlToJson_seq (item:rest) ind = (_yamlToJson item ind ind)
+                                  ++ ",\n" ++ (_yamlToJson_seq rest ind)
 
+-- returns string padded with given number of spaces
 indentStr :: Int -> String -> String
 indentStr ind str = (replicate ind ' ') ++ str
 
-{-
-yamlToJson :: String -> String
-yamlToJson yaml_str = _yamlToJson $ extractStructure $ preprocYamlTokens $ lexer yaml_str
-_yamlToJson :: YamlStructure -> String
-_yamlToJson st =
-    -}
-
- {-   | (next == EOF) = PreYamlEof
-    | (next == DOC_START)  = PreYamlDocStart
-    | (next == DOC_END)    = PreYamlDocEnd
-    | (next == DEDENT)     = PreYamlDedent
-    | (next == INDENT i)   = PreYamlIndent i
-    | (next == DASH)       = PreYamlScalar curr
-    | (next == SCALAR _ _) = PreYamlScalar curr
-    | (next == COLON)      = if fst rest == SCALAR _ _ then PreYamlKV curr (fst rest)-}
+stripRedundant :: [(Int, YamlToken)] -> [(Int, YamlToken)]
+stripRedundant tokens = filter (\case 
+                                (_, COMMENT _) -> False;
+                                (_, DIRECTIVE _) -> False;
+                                (_, SCALAR "" _) -> False; _ -> True) tokens
 
 
-stripRedundant tokens = filter (\case
-                                (COMMENT _) -> False;
-                                (DIRECTIVE _) -> False;
-                                (SCALAR "" _) -> False; _ -> True) tokens
-                            
+
+
+

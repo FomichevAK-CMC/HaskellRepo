@@ -1,0 +1,6 @@
+# TEST 6
+# EXPECTED RESULT: ERROR
+# test with mixed structures
+
+hello: world
+- this is bad

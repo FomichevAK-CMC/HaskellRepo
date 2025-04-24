@@ -1,0 +1,12 @@
+# TEST 4
+# EXPECTED RESULT: SUCCESS
+# This is a simple test to check for proper multi-document support
+# should output 4 documents 2 of which are empty (null)
+...
+---
+doc2
+...
+...
+---
+doc4
+

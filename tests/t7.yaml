@@ -1,0 +1,7 @@
+# TEST 7
+# EXPECTED RESULT: ERROR
+# test for unsupported token types
+
+
+hello: [1, 2, 3] # this structure type is not supported in my parser
+good: bad

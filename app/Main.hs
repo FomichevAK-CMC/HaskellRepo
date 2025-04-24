@@ -1,7 +1,11 @@
 module Main (main) where
-import MyParser (yamlToJson)
+import MyParser
+import System.Environment (getArgs)
 
-main :: IO ()
+main:: IO ()
 main = do
-  content <- readFile "input.yaml"
-  putStrLn $ yamlToJson content
+    args <- getArgs
+    case args of
+        [] -> do putStrLn $ "Command line arguments:\n  <yamlfile> - path to yaml file to convert."
+        (arg:_) -> do content <- readFile arg
+                      putStrLn $ yamlToJson content

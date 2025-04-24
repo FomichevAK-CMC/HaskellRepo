@@ -1,0 +1,5 @@
+# TEST 8
+# EXPECTED RESULT: ERROR
+# test for unterminated string
+
+hello: "world

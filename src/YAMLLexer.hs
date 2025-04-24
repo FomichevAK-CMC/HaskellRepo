@@ -1,6 +1,5 @@
 module YAMLLexer (YamlToken(..), ScalarStyle(..), lexer) where
-
-import Data.Char (isSpace, isDigit, isAlphaNum)
+import Data.Char (isSpace)
 import Data.List (isPrefixOf)
 
 -- different styles a scalar can have
@@ -42,139 +41,124 @@ data YamlToken
     | ERROR String     -- Lexing error
     deriving (Show, Eq)
 
-lstrip :: String -> String
-lstrip = dropWhile isSpace
-isAnchorChar :: Char -> Bool
-isAnchorChar c = isAlphaNum c || c == '_' || c == '-'
+
 rtrim :: String -> String
 rtrim = reverse . dropWhile isSpace . reverse
 
 -- Main lexer function
-lexer :: String -> [YamlToken]
-lexer input = processLines (lines input) [0]
+lexer :: String -> [(Int, YamlToken)]
+lexer input = processLines (lines input)
 
--- processLines function
-processLines :: [String] -> [Int] -> [YamlToken]
-processLines [] stack = replicate (length stack - 1) DEDENT ++ [EOF]
-processLines (line:ls) stack@(currentIndent:_) =
+processLines :: [String] -> [(Int, YamlToken)]
+processLines [] = [(0, EOF)]
+processLines (line:ls) =
     let (leadingSpaces, restOfLine) = span isSpace line
         indent = length leadingSpaces
         isLineEffectivelyBlank = all isSpace restOfLine
-        isLineCommentOnly = case lstrip restOfLine of ('#':_) -> True; _ -> False
     in
-    if isLineEffectivelyBlank then processLines ls stack
-    else if isLineCommentOnly then
-        tokenize (lstrip restOfLine) ++ processLines ls stack
+    if isLineEffectivelyBlank then
+        processLines ls
     else
-        if indent > currentIndent then
-            let tokens = tokenize restOfLine
-            in INDENT indent : tokens ++ processLines ls (indent:stack)
-        else if indent < currentIndent then
-            let (dedents, newStack) = popIndents indent stack
-            in if null newStack then
-                   ERROR ("Invalid dedent to column " ++ show indent) : processLines ls stack
-               else
-                   let tokens = tokenize restOfLine
-                   in dedents ++ tokens ++ processLines ls newStack
-        else
-            let tokens = tokenize restOfLine
-            in tokens ++ processLines ls stack
+        -- Tokenize the line content, passing the line's starting indent
+        let lineTokens = tokenize restOfLine indent
+        in lineTokens ++ processLines ls
 
--- popIndents function
-popIndents :: Int -> [Int] -> ([YamlToken], [Int])
-popIndents targetIndent stack@(current:rest)
-    | current == targetIndent = ([], stack)
-    | current > targetIndent && not (null rest) = let (dedents, finalStack) = popIndents targetIndent rest  in (DEDENT : dedents, finalStack)
-    | otherwise = ([], [])
 
 
 -- tokenize function and its where clause helpers
-tokenize :: String -> [YamlToken]
-tokenize lineContent = _tokenize (lstrip lineContent) -- Strip leading inline space ONCE
+tokenize :: String -> Int -> [(Int, YamlToken)]
+tokenize ('#':cs) ind = [(ind, COMMENT ('#':cs))]
+tokenize lineContent ind = _tokenize lineContent ind
   where
-    _tokenize :: String -> [YamlToken]
-    _tokenize "" = []
-    _tokenize input =
+    _tokenize :: String -> Int -> [(Int, YamlToken)]
+    _tokenize "" _ = []
+    _tokenize input indent =
         case input of
-            s | "---" `isPrefixOf` s && followedBySepOrEnd 3 s -> DOC_START : _tokenize (lstrip (drop 3 s))
-            s | "..." `isPrefixOf` s && followedBySepOrEnd 3 s -> DOC_END   : _tokenize (lstrip (drop 3 s))
-            '#':cs -> [COMMENT ('#':cs)]
-            '%':cs -> let (directive, _) = span (/= '\n') cs in [DIRECTIVE ('%':directive)]
-            ':':cs | isSep cs -> COLON    : _tokenize (lstrip cs)
-            '-':cs | isSep cs -> DASH     : _tokenize (lstrip cs)
-            '?':cs | isSep cs -> QUESTION : _tokenize (lstrip cs)
-            '|':cs | isSep cs -> BLOCK_LITERAL : _tokenize (lstrip cs) -- Keep as indicator
-            '>':cs | isSep cs -> BLOCK_FOLDED  : _tokenize (lstrip cs) -- Keep as indicator
-            '[':cs -> LBRACKET : _tokenize cs
-            ']':cs -> RBRACKET : _tokenize cs
-            '{':cs -> LBRACE   : _tokenize cs
-            '}':cs -> RBRACE   : _tokenize cs
-            ',':cs -> COMMA    : _tokenize cs
-            '&':cs -> lexAnchor ANCHOR cs
-            '*':cs -> lexAnchor ALIAS cs
-            '!':cs -> lexTag ('!':cs)
+            '#':cs -> [(indent, COMMENT ('#':cs))]
+            ' ':cs -> _tokenize cs (indent + 1)
+            '-':'-':'-':cs | isSep cs -> (indent, DOC_START) : _tokenize cs (indent + 3)
+            '.':'.':'.':cs | isSep cs -> (indent, DOC_END)   : _tokenize cs (indent + 3)
+            '%':cs -> let (directive, _) = span (/= '\n') cs in
+                          [(indent, DIRECTIVE ('%':directive))]
+            ':':cs | isSep cs -> (indent, COLON)    : _tokenize cs (indent + 1)
+            '-':cs | isSep cs -> (indent, DASH)     : _tokenize cs (indent + 1)
+            '?':cs | isSep cs -> (indent, QUESTION) : _tokenize cs (indent + 1)
+            '|':cs | isSep cs -> (indent, BLOCK_LITERAL) : _tokenize cs (indent + 1)
+            '>':cs | isSep cs -> (indent, BLOCK_FOLDED)  : _tokenize cs (indent + 1)
+            '[':cs -> (indent, LBRACKET) : _tokenize cs (indent + 1)
+            ']':cs -> (indent, RBRACKET) : _tokenize cs (indent + 1)
+            '{':cs -> (indent, LBRACE)   : _tokenize cs (indent + 1)
+            '}':cs -> (indent, RBRACE)   : _tokenize cs (indent + 1)
+            ',':cs -> (indent, COMMA)    : _tokenize cs (indent + 1)
             -- Quoted Scalars
-            '\'':cs -> lexSingleQuoted cs
-            '"':cs -> lexDoubleQuoted cs
+            '\'':cs -> lexSingleQuoted cs indent
+            '"':cs -> lexDoubleQuoted cs indent
             -- Default: Plain Scalar
-            _ -> lexPlainScalar input
+            _ -> lexPlainScalar input indent
+
+    
 
     isSep :: String -> Bool
-    isSep "" = True; isSep "\r" = True; isSep (' ':_) = True; isSep ('#':_) = True; isSep _ = False; -- (INVESTIGATE) after (lines) function there shouldn't be any \r but they are still there. 
+    isSep "" = True; isSep "\r" = True; isSep (' ':_) = True; isSep ('#':_) = True; isSep _ = False;
     followedBySepOrEnd :: Int -> String -> Bool
-    followedBySepOrEnd i s | length s <= i = True | otherwise = let c = s !! i in isSpace c || c == '#'
-    lexAnchor :: (String -> YamlToken) -> String -> [YamlToken]
-    lexAnchor tokenConstructor cs = let (name, rest) = span isAnchorChar cs in if null name then ERROR "Invalid anchor/alias: missing name after indicator" : _tokenize rest else tokenConstructor name : _tokenize rest
-    lexTag :: String -> [YamlToken]
-    lexTag ('!':cs) = let (tagChars, rest) = span (\c -> not (isSpace c) && c `notElem` ",[]{}") cs in TAG ('!':tagChars) : _tokenize rest
-    lexTag _ = [ERROR "Invalid call to lexTag"]
+    followedBySepOrEnd i s | length s <= i = True
+                           | otherwise = let c = s !! i in isSpace c || c == '#'
 
     -- Lex single-quoted scalar
-    lexSingleQuoted :: String -> [YamlToken]
-    lexSingleQuoted input =
+    lexSingleQuoted :: String -> Int -> [(Int, YamlToken)]
+    lexSingleQuoted input indent =
         let (scalarAttempt, rest, terminated) = consumeSingle "" input
+            len = length scalarAttempt
         in if terminated
-           then SCALAR scalarAttempt SingleQuotedStyle : _tokenize rest
-           else [ERROR ("Unterminated single-quoted string starting with: '" ++ take 30 scalarAttempt ++ "...")]
+           then (indent, SCALAR scalarAttempt SingleQuotedStyle) : _tokenize rest (indent + len + 1)
+           else error $ "Unterminated single-quoted string starting with: '"
+                        ++ take 30 scalarAttempt ++ "..."
 
     -- Lex double-quoted scalar
-    lexDoubleQuoted :: String -> [YamlToken]
-    lexDoubleQuoted input =
+    lexDoubleQuoted :: String -> Int -> [(Int, YamlToken)]
+    lexDoubleQuoted input indent =
         let (scalarAttempt, rest, terminated) = consumeDouble "" input
+            len = length scalarAttempt
         in if terminated
-           then SCALAR scalarAttempt DoubleQuotedStyle : _tokenize rest
-           else [ERROR ("Unterminated double-quoted string starting with: \"" ++ take 30 scalarAttempt ++ "...")]
+           then (indent, SCALAR scalarAttempt DoubleQuotedStyle):(_tokenize rest (indent + len + 1))
+           else error $ "Unterminated double-quoted string starting with: \""
+                        ++ take 30 scalarAttempt ++ "..."
 
     -- Lex plain scalar
-    lexPlainScalar :: String -> [YamlToken]
-    lexPlainScalar input =
+    lexPlainScalar :: String -> Int -> [(Int, YamlToken)]
+    lexPlainScalar input indent =
         let (scalarVal, rest) = consumePlain "" input
+            val = rtrim scalarVal
         in if null scalarVal then
-               if null rest then [] else _tokenize rest
-           else SCALAR (rtrim scalarVal) PlainStyle : _tokenize rest
+               if null rest then [] else (_tokenize rest indent)
+           else (indent, SCALAR val PlainStyle) : _tokenize rest (indent + (length val))
 
     consumeSingle :: String -> String -> (String, String, Bool)
-    consumeSingle acc "" = (acc, "", False); consumeSingle acc ('\'':'\'':xs) = consumeSingle (acc ++ "'") xs; consumeSingle acc ('\'':xs) = (acc, xs, True); consumeSingle acc (x:xs) = consumeSingle (acc ++ [x]) xs
+    consumeSingle acc "" = (acc, "", False)
+    consumeSingle acc ('\'':'\'':xs) = consumeSingle (acc ++ "'") xs
+    consumeSingle acc ('\'':xs) = (acc, xs, True)
+    consumeSingle acc (x:xs) = consumeSingle (acc ++ [x]) xs
+    
     consumeDouble :: String -> String -> (String, String, Bool)
-    consumeDouble acc "" = (acc, "", False); consumeDouble acc ('\\':'"':xs) = consumeDouble (acc ++ "\"") xs; consumeDouble acc ('\\':'\\':xs) = consumeDouble (acc ++ "\\") xs; consumeDouble acc ('\\':'n':xs) = consumeDouble (acc ++ "\n") xs; consumeDouble acc ('"':xs) = (acc, xs, True); consumeDouble acc ('\\':x:xs)= consumeDouble (acc ++ ['\\', x]) xs; consumeDouble acc (x:xs) = consumeDouble (acc ++ [x]) xs
+    consumeDouble acc "" = (acc, "", False)
+    consumeDouble acc ('\\':'"':xs) = consumeDouble (acc ++ "\"") xs
+    consumeDouble acc ('\\':'\\':xs) = consumeDouble (acc ++ "\\") xs
+    consumeDouble acc ('\\':'n':xs) = consumeDouble (acc ++ "\n") xs
+    consumeDouble acc ('"':xs) = (acc, xs, True)
+    consumeDouble acc ('\\':x:xs) = consumeDouble (acc ++ ['\\', x]) xs
+    consumeDouble acc (x:xs) = consumeDouble (acc ++ [x]) xs
 
     -- Returns (AccumulatedString, Remainder)
     consumePlain :: String -> String -> (String, String)
     consumePlain acc "" = (acc, "") -- End of input string
+    consumePlain acc (' ':'#':cs) = ((rtrim acc), '#':cs)
     consumePlain acc remaining@(c:cs)
-        | c == '#' = (acc, remaining)
         -- Check structural indicators THAT REQUIRE a following separator
-        | c == ':' && isSep cs = (acc, remaining)
-        | c == '-' && isSep cs = (acc, remaining)
-        | c == '?' && isSep cs = (acc, remaining)
-        | c == '|' && isSep cs = (acc, remaining)
-        | c == '>' && isSep cs = (acc, remaining)
+        | c == ':' && isSep cs = (acc, remaining) -- Stop *before* ': ' etc.
+        | c == '-' && isSep cs = (acc, remaining) -- Stop *before* '- ' etc.
         -- Check flow indicators/comma (don't require space)
         | c `elem` "[]{}," = (acc, remaining) -- Stop *before* flow chars
         -- Check potential start of document markers (less likely mid-scalar, but for safety)
-        | c == '-' && isPrefixOf "--" cs && followedBySepOrEnd 3 remaining = (acc, remaining) -- Stop before ---
-        | c == '.' && isPrefixOf ".." cs && followedBySepOrEnd 3 remaining = (acc, remaining) -- Stop before ...
-        -- Check anchor/alias/tag starts (cannot be inside plain scalar)
-        | c `elem` "&*!" = (acc, remaining) -- Stop before these indicators
-        -- If none of the above stopping conditions match, consume 'c' and continue
+        | c == '-' && isPrefixOf "--" cs && followedBySepOrEnd 3 remaining = (acc, remaining)
+        | c == '.' && isPrefixOf ".." cs && followedBySepOrEnd 3 remaining = (acc, remaining)
         | otherwise = consumePlain (acc ++ [c]) cs

@@ -1,0 +1,6 @@
+# TEST 5
+# EXPECTED RESULT: ERROR
+# test with incorrect indentation
+
+hello: world
+ good: bad

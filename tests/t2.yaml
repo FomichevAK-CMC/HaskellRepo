@@ -1,0 +1,15 @@
+# TEST 2
+# EXPECTED RESULT: SUCCESS
+# This a simple test for recursive structure support
+
+# should be a nested mapping
+hello:
+    apple: 1
+    orange: "Not Found"
+world:
+  # should be a nested sequence
+  - - high
+    - middle
+    - low
+  - something
+

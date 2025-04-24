@@ -1,3 +1,10 @@
+# TEST 1 
+# EXPECTED RESULT: SUCCESS
+# This was a package.yaml file of this project at some point of developement
+# I added <%YAML 1.2> to test that program correctly discards directives
+
+%YAML 1.2
+---
 name:                ytoj
 version:             0.1.0.0
 github:              "githubuser/ytoj"
@@ -22,7 +29,6 @@ description:         Please see the README on GitHub at <https://github.com/gith
 dependencies:
 - base >= 4.7 && < 5
 - regex-tdfa
-- pretty-show
 
 ghc-options:
 - -Wall
