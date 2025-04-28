@@ -1,5 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
-module MyParser  where
+module MyParser (yamlToJson) where
 import YAMLLexer
 
 -- main yaml types (not all are supported yet)
@@ -49,17 +49,17 @@ data YamlDocument = YamlDoc YamlValue deriving (Show, Eq)
 -- arranges a series of preprocessed yaml tokens into a structure based on indentation
 extractStructure :: [(Int, PreprocYamlToken)] -> [YamlDocument] -- TODO: Add document support
 extractStructure [] = error $ "ERROR (extractStruncture): incomplete structure!"
-extractStructure tokens@((_, PreYamlDocStart):rest) = _extractStructure tokens
+extractStructure tokens@((_, PreYamlDocStart):_) = _extractStructure tokens
 extractStructure tokens = _extractStructure ((0, PreYamlDocStart):tokens)
 
 _extractStructure :: [(Int, PreprocYamlToken)] -> [YamlDocument]
 _extractStructure [] = error $ "ERROR (extractStruncture): incomplete structure!"
 _extractStructure ((i, PreYamlDocStart):rest) = let (val, rest2) = _extractStructure_1 rest i in
                                                     (YamlDoc val):(_extractStructure rest2)
-_extractStructure ((_, PreYamlDocEnd):(_, PreYamlEof):rest) = []
+_extractStructure ((_, PreYamlDocEnd):(_, PreYamlEof):_) = []
 _extractStructure ((_, PreYamlDocEnd):rest) = (YamlDoc YamlEmpty):(_extractStructure rest)
 _extractStructure ((_, PreYamlEof):_) = []
-_extractStructure tokens@((i, _):_) = error $ "ERROR (_extractStructure): inconsistent yaml structure!" 
+_extractStructure _ = error $ "ERROR (_extractStructure): inconsistent yaml structure!" 
 
 
 _extractStructure_1 :: [(Int, PreprocYamlToken)] -> Int -> (YamlValue, [(Int, PreprocYamlToken)])
@@ -69,7 +69,7 @@ _extractStructure_1 tokens@((i, token):rest) ind
                         ++ (show token)++ "! Got " ++ (show i) ++ ", expected " ++ (show ind) ++ "."
     | otherwise =
         case token of
-            (PreYamlScalar (SCALAR str style)) -> _extractStructure_str tokens i
+            (PreYamlScalar (SCALAR _ _)) -> _extractStructure_str tokens
             PreYamlK _      -> _extractStructure_map tokens i
             PreYamlSeq      -> _extractStructure_seq tokens i
             PreYamlDocEnd   -> (YamlEmpty, rest)
@@ -77,11 +77,13 @@ _extractStructure_1 tokens@((i, token):rest) ind
             PreYamlEof      -> (YamlEmpty, tokens)
             _other -> error $ "ERROR (_extractStructure_1): unsupported token <"
                               ++ (show token) ++ ">!\n"
-_extractStructure_str :: [(Int, PreprocYamlToken)] -> Int -> (YamlValue, [(Int, PreprocYamlToken)])
-_extractStructure_str tokens@((i, (PreYamlScalar (SCALAR str style))):next:rest) ind =
+_extractStructure_str :: [(Int, PreprocYamlToken)] -> (YamlValue, [(Int, PreprocYamlToken)])
+_extractStructure_str [] = error $ "ERROR (_extractStruncture_str): incomplete structure!\n"
+_extractStructure_str ((_, (PreYamlScalar (SCALAR str style))):next:rest) =
     case next of
         (_, PreYamlDocEnd) -> ((YamlScalar str style), rest)
         _                  -> ((YamlScalar str style), next:rest)
+_extractStructure_str _ = error $ "ERROR (_extractStructure_str): This should not happen!\n"
 
 _extractStructure_seq :: [(Int, PreprocYamlToken)] -> Int -> (YamlValue, [(Int, PreprocYamlToken)])
 _extractStructure_seq [] _ = error $ "ERROR (_extractStruncture_seq): incomplete structure!"
