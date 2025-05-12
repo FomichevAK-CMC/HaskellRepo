@@ -1,5 +1,3 @@
-Fomichev Andrey, 325
-
 Converts a primitive subset of YAML into JSON.
 
 Usage:
